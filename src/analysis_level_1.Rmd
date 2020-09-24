@@ -1,0 +1,1072 @@
+---
+title: "Lightning Network Study | Level 1 Heuristics"
+author: Bernhard Haslhofer
+date: "`r Sys.Date()`"
+output:
+  beamer_presentation:
+    slide_level: 2
+classoption: "aspectratio=169"
+---
+
+```{r libs_and_functions, include=FALSE}
+
+ensure_packages <- function(packages) {
+  # install of not yet done
+  new.packages <- packages[!(packages %in% installed.packages()[,"Package"])]
+  if(length(new.packages)) install.packages(new.packages, repos = "http://cran.us.r-project.org")
+  # load libraries
+  lapply(packages, library, character.only = TRUE)
+}
+
+# install (if not available) and load libraries
+ensure_packages(c("tidyverse", "xtable", "assertr", "igraph", "scales"))
+
+# set dataset path
+dataset.path <- "../data/joined/level_1/"
+
+# set results path
+results.path <- "../data/joined/results/"
+
+# set paper path
+paper.path <- "~/Documents/publications/2020-LN-Analysis/"
+
+# make sure plot path exists
+dir.create(file.path("../plots"), showWarnings = FALSE)
+```
+
+## Motivation | Hypothesis
+
+- Lighning users follow certain behavioural patterns
+    - they fund several channels using the same (source) wallet
+    - after closing a channel, they collect funds in the same (destination) wallet
+
+- Each funding and settlement address can be mapped to an entity, which likely represents some user wallet (co-spent heuristics)
+
+- Above behavioural patterns are reflected in the funding and settlement egonets and can be identified **heuristically**
+
+
+```{r load_datasets, echo=FALSE, message=FALSE}
+
+load_dataset <- function() {
+  
+  funding.addr_entities <- read_csv(
+      paste0(dataset.path, "funding_addresses_entities.csv")
+  )
+  
+  funding.entity_relations <- read_csv(
+      paste0(dataset.path, "funding_entities_incoming_relations.csv")
+  )
+  
+  funding.entity_stats <- read_csv(
+    paste0(dataset.path, "funding_entities_stats.csv"))
+  
+  settlement.addr_entities <- read_csv(
+      paste0(dataset.path, "settlement_addresses_entities.csv")
+  )
+  
+  settlement.entity_relations <- read_csv(
+      paste0(dataset.path, "settlement_entities_outgoing_relations.csv")
+  )
+  
+  settlement.entity_stats <- read_csv(
+    paste0(dataset.path, "settlement_entities_stats.csv"))
+  
+  address.categories <- read_csv(
+    paste0(dataset.path, "address_categories.csv")
+  )
+  
+  # Check dataset with assertions
+  
+  funding.addr_entities %>%
+    assert(in_set(funding.entity_relations$funding_entity), funding_entity) %>%
+    assert(in_set(funding.entity_stats$entity), funding_entity)
+  
+  funding.entity_relations %>%
+    assert(in_set(funding.addr_entities$funding_entity), funding_entity) %>%
+    assert(in_set(funding.entity_stats$entity), src_entity)
+  
+  settlement.addr_entities %>%
+    assert(in_set(settlement.entity_stats$entity), settlement_entity)
+  
+  settlement.entity_relations %>%
+    assert(in_set(settlement.addr_entities$settlement_entity), settlement_entity) %>%
+    assert(in_set(settlement.entity_stats$entity), dst_entity)
+  
+  address.categories %>%
+    assert(in_set(union(funding.entity_stats$repr_address, settlement.entity_stats$repr_address)), address)
+  
+  # Create and cache entities data frame
+  
+  addresses <<- bind_rows(
+    funding.addr_entities %>%
+      select(address = funding_address, entity = funding_entity) %>% mutate(use = 'funding'),
+    settlement.addr_entities %>% 
+      select(address = settlement_address, entity = settlement_entity) %>% mutate(use = 'settlement')
+  ) %>%
+    unique %>%
+    mutate(seen = 1) %>%
+    pivot_wider(names_from = use, values_from = seen)
+  
+  entities <<- bind_rows(
+    funding.addr_entities %>% select(entity = funding_entity) %>% mutate(use = 'funding'),
+    funding.entity_relations %>% select(entity = src_entity) %>% mutate(use = 'src_entity'),
+    settlement.addr_entities %>% select(entity = settlement_entity) %>% mutate(use = 'settlement'),
+    settlement.entity_relations %>% select(entity = dst_entity) %>% mutate(use = 'dst_entity')
+  ) %>% 
+    unique %>%
+    mutate(seen = 1) %>%
+    pivot_wider(names_from = use, values_from = seen) %>%
+    left_join(
+      bind_rows(
+        funding.entity_stats,
+        settlement.entity_stats
+      ) %>% unique,
+      by = 'entity'
+    ) %>%
+    left_join(address.categories, by = c('repr_address'= 'address'))
+  
+  entity_relations <<- bind_rows(
+      funding.entity_relations %>%
+        select(source = src_entity, target = funding_entity, no_transactions, value) %>%
+        mutate(use = 'funding'),
+      settlement.entity_relations %>%
+        select(target = dst_entity, source = settlement_entity, no_transactions, value) %>%
+        mutate(use = 'settlement')
+    ) %>%
+      mutate(use = as.factor(use))
+}
+
+load_dataset()
+
+```
+
+
+```{r export_all_entities, include=FALSE}
+
+entities %>%
+  select(entity, repr_address, funding, src_entity, settlement, dst_entity) %>%
+  write.csv(file = paste0(dataset.path, "views/all_entities_w_repr_addresses.csv"), row.names = FALSE)
+
+entities %>%
+  select(address = repr_address) %>%
+  write.csv(file = paste0(dataset.path, "views/repr_addresses.csv"), row.names = FALSE)
+
+entity_relations %>%
+  select(source, target, use) %>%
+  inner_join(entities, by = c('source' = 'entity')) %>%
+  select(source, source_repr_address = repr_address, target, use) %>%
+  inner_join(entities, by = c('target' = 'entity')) %>%
+  select(source, source_repr_address, target, target_repr_address = repr_address, use) %>%
+  write.csv(file = paste0(dataset.path, "views/all_entity_relations_w_repr_addresses.csv"), row.names = FALSE)
+```
+
+
+## Dataset Overview
+
+```{r summarize_datasets, echo=FALSE, message=FALSE, results='asis'}
+
+tbl.dataset <- tibble(
+  c("Source", "Funding", "Settlement", "Destination"),
+  no_addresses = c(
+    NA,
+    addresses %>% filter(funding == 1) %>% nrow,
+    addresses %>% filter(settlement == 1) %>% nrow,
+    NA
+  ),
+  no_entities = c(
+    entities %>% filter(src_entity == 1) %>% nrow,
+    entities %>% filter(funding == 1) %>% nrow,
+    entities %>% filter(settlement == 1) %>% nrow,
+    entities %>% filter(dst_entity == 1) %>% nrow
+  ),
+  exp_addresses = c(
+    entities %>% filter(src_entity == 1) %>% select(no_addresses) %>% sum,
+    entities %>% filter(funding == 1) %>% select(no_addresses) %>% sum,
+    entities %>% filter(settlement == 1) %>% select(no_addresses) %>% sum,
+    entities %>% filter(dst_entity == 1) %>% select(no_addresses) %>% sum
+  ),
+  services = c(
+    entities %>% filter(src_entity == 1 & !is.na(category)) %>% nrow,
+    entities %>% filter(funding == 1 & !is.na(category)) %>% nrow,
+    entities %>% filter(settlement == 1 & !is.na(category)) %>% nrow,
+    entities %>% filter(dst_entity == 1 & !is.na(category)) %>% nrow
+  ),
+  relations = c(
+    NA,
+    entity_relations %>% filter(use == 'funding') %>% nrow,
+    entity_relations %>% filter(use == 'settlement') %>% nrow,
+    NA
+  )
+)
+
+xt <- tbl.dataset %>%
+  xtable(
+    align = c("l", "@{\\extracolsep{\\fill}}l", rep("r", 5)),
+    digits = c(0, 0, 0, 0, 0, 0, 0)
+  )
+names(xt) <- c("", "# Addresses", "# Entities", "# Addresses (Exp.)", "# Services", "# Relations")
+
+print(xt,
+      file = paste0(paper.path, "tables/dataset_overview.tex"),
+      table.placement = "tbp",
+      floating = FALSE,
+      latex.environments = "center",
+      include.rownames = FALSE,
+      comment = TRUE,
+      booktabs = TRUE,
+      tabular.environment = "tabular*",
+      width="\\textwidth",
+      format.args = list(big.mark = ",", decimal.mark = ".")
+)
+
+print(xt,
+      include.rownames = FALSE,
+      comment = FALSE
+)
+
+```
+
+## Services Overview
+
+```{r service_stats, echo=FALSE, message=FALSE, fig.height=3, fig.width=5}
+
+rel_category_tags <- function(entity_df, ps) {
+  entity_df %>%
+  select(entity, category) %>%
+    group_by(category) %>%
+      summarize(count = n()) %>%
+  arrange(desc(count)) %>%
+  mutate(percentage = count / entities %>% nrow) %>%
+  mutate(position = ps) %>%
+  select(position, category, percentage)
+}
+
+bind_rows(
+  (entities %>%
+    filter(!is.na(category)) %>%
+    filter(src_entity == 1) %>%
+    rel_category_tags('source')
+  ),
+  (entities %>%
+    filter(!is.na(category)) %>%
+    filter(funding == 1) %>%
+    rel_category_tags('funding')
+  ),
+  (entities %>%
+    filter(!is.na(category)) %>%
+    filter(settlement == 1) %>%
+    rel_category_tags('settlement')
+  ),
+  (entities %>%
+    filter(!is.na(category)) %>%
+    filter(dst_entity == 1) %>%
+    rel_category_tags('destination')
+  )
+) %>%
+  ggplot(aes(x=position, y=percentage)) +
+    geom_bar(aes(fill=category), stat='identity') +
+    labs(x="Entity type", y="Percentage", fill="Category") +
+    scale_y_continuous(labels=percent) +
+    theme_light()
+    
+# ggsave(file = paste0(paper.path, "figures/entity_categories.pdf"))
+
+```
+
+
+```{r compute_components, include=FALSE}
+
+compute_components <- function(edges, nodes) {
+  comp <- graph.data.frame(edges, nodes, directed = TRUE) %>% components
+  data.frame(
+    entity = as.numeric(names(comp$membership)),
+    component = comp$membership,
+    row.names = NULL
+  )
+}
+
+entities <- entities %>%
+  left_join(
+    compute_components(
+      entity_relations %>% filter(use == 'funding') %>% select(source, target),
+      entities %>% filter(funding == 1 | src_entity == 1) %>% select(entity)
+    ) %>% select(entity, funding_component = component),
+    by = 'entity'
+  ) %>%
+  left_join(
+    compute_components(
+      entity_relations %>% filter(use == 'settlement') %>% select(source, target),
+      entities %>% filter(settlement == 1 | dst_entity == 1) %>% select(entity)
+    ) %>% select(entity, settlement_component = component),
+    by = 'entity'
+  )
+
+components.funding <- entities %>%
+  filter(!is.na(funding_component)) %>%
+  group_by(funding_component, src_entity, funding) %>%
+  summarize(
+    size = n(),
+  ) %>%
+  mutate(type = case_when(
+    !is.na(src_entity) & is.na(funding) ~ 'source',
+    is.na(src_entity) & !is.na(funding) ~ 'funding',
+    !is.na(src_entity) & !is.na(funding) ~ 'both',    
+  )) %>%
+  ungroup %>%
+  select(component = funding_component, size, type) %>%
+  pivot_wider(names_from = type, values_from = size) %>%
+  rowwise %>%
+    mutate(size = sum(both, source, funding, na.rm = TRUE)) %>%
+  ungroup %>%
+  replace(., is.na(.), 0)
+
+components.settlement <- entities %>%
+  filter(!is.na(settlement_component)) %>%
+  group_by(settlement_component, settlement, dst_entity) %>%
+  summarize(
+    size = n(),
+  ) %>%
+  mutate(type = case_when(
+    !is.na(settlement) & is.na(dst_entity) ~ 'settlement',
+    is.na(settlement) & !is.na(dst_entity) ~ 'destination',
+    !is.na(settlement) & !is.na(dst_entity) ~ 'both',    
+  )) %>%
+  ungroup %>%
+  select(component = settlement_component, size, type) %>%
+  pivot_wider(names_from = type, values_from = size) %>%
+  rowwise %>%
+    mutate(size = sum(both, destination, settlement, na.rm = TRUE)) %>%
+  ungroup %>%
+  replace(., is.na(.), 0)
+```
+
+# Exploring the Funding Egonets
+
+## Funding Egonets | Component Size Distribution
+
+```{r funding_network_components_stats, echo=FALSE, fig.height=3, fig.width=5, message=FALSE}
+
+# Plot component size distribution
+components.funding %>%
+  group_by(size) %>%
+    summarize(count = n()) %>%
+  ggplot(aes(x=size, y=count)) +
+  geom_point(shape=1) +
+  scale_x_log10(breaks=c(2,10,100,1000,10000,50000,100000)) +
+  labs(x = "Size", y = "Count")
+```
+
+## Funding Egonets | Observations
+
+- Number of connected components: `r components.funding %>% nrow`
+
+- Distribution is highly skewed: `r  components.funding %>% filter(size == 2) %>% nrow` components have just two nodes (one source entity, one funding entity); we can safely ignore them.
+
+- We also ignore the tail (`r components.funding %>% filter(size > 1000) %>% nrow` components > 1000 entities)
+
+- Remaining components: `r components.funding %>% filter(size > 2 & size <= 1000) %>% nrow`
+
+
+```{r component_extraction_visualization, include=FALSE}
+
+# Plots a network for a single component
+plot_component <- function(component_id, side) {
+  if(side == 'funding') {
+    entities_filtered <- entities %>% filter(funding_component == component_id)
+    relations_filtered <- entity_relations %>% filter(use == 'funding')
+  } else if(side == 'settlement') {
+    entities_filtered <- entities %>% filter(settlement_component == component_id)
+    relations_filtered <- entity_relations %>% filter(use == 'settlement')
+  }
+  relations_filtered <- relations_filtered %>%
+    filter(source %in% entities_filtered$entity & target %in% entities_filtered$entity) %>%
+    select(source, target)
+  component <- graph.data.frame(relations_filtered, entities_filtered, directed = TRUE)
+  V(component)$size <- scales::rescale(V(component)$no_addresses, to=c(5,25))
+  V(component)$size <- 10
+  V(component)$label <- NA
+  if(side == 'funding') {
+    V(component)$color <- case_when(
+      is.na(entities_filtered$funding) & !is.na(entities_filtered$src_entity) ~ 'red2',
+      !is.na(entities_filtered$funding) & is.na(entities_filtered$src_entity) ~ 'green2',
+      !is.na(entities_filtered$funding) & !is.na(entities_filtered$src_entity) ~ 'yellow2'
+    )
+  } else if(side == 'settlement') {
+    V(component)$color <- case_when(
+      is.na(entities_filtered$settlement) & !is.na(entities_filtered$dst_entity) ~ 'red2',
+      !is.na(entities_filtered$settlement) & is.na(entities_filtered$dst_entity) ~ 'green2',
+      !is.na(entities_filtered$settlement) & !is.na(entities_filtered$dst_entity) ~ 'yellow2'
+    )
+  }
+  plot(component, layout = layout.fruchterman.reingold, vertex.label.dist=3)
+}
+
+```
+
+
+## Funding Egonets | Star Pattern
+
+* A set of funding entities (green) within a component receives funds from the same source entities. These funding entities can also be the source for other funding entities.
+
+* **Funding entities of each component can be clustered**
+
+* Component filtering condition: source == 1 & funding > 1 & both == 0
+
+```{r annotate_star_pattern, echo=FALSE, include=FALSE}
+
+components.funding.star <- components.funding %>%
+  filter(source == 1 & funding > 1 & both == 0) %>%
+  select(component) %>%
+  mutate(pattern = "star")
+  
+```
+
+## Funding Egonets | Star Pattern | Example
+
+```{r plot_star_pattern_to_pdf, echo=FALSE, message=FALSE, eval = FALSE}
+
+pdf(file=paste0(results.path, "star_pattern.pdf"))  
+
+trash <- lapply(components.funding.star$component, plot_component, 'funding')
+
+dev.off()
+    
+```
+
+
+
+```{r plot_star_pattern, echo=FALSE, message=FALSE}
+
+plot_component(4283, 'funding')
+    
+```
+
+## Funding Egonets | Snake Pattern
+
+* A single source entity (red) funds an entity that is used for funding and also funds another funding entity (yellow) - we call them *dual use* entity.
+
+* **Funding and dual use entities can be clustered **
+
+* Component filtering condition: source == 1 & funding >= 1 & both > 0
+
+```{r annotate_snake_pattern, echo=FALSE, include=FALSE}
+
+components.funding.snake <- components.funding %>%
+  filter(source == 1 & funding >= 1 & both > 0) %>%
+  select(component) %>%
+  mutate(pattern = "snake")
+
+```
+
+## Funding Egonets | Snake Pattern | Example
+
+```{r plot_snake_pattern_to_pdf, echo=FALSE, message=FALSE, eval = FALSE}
+
+pdf(file=paste0(results.path, "snake_pattern.pdf"))  
+
+trash <- lapply(components.funding.snake$component, plot_component, 'funding')
+
+dev.off()
+    
+```
+
+```{r plot_snake_pattern, echo=FALSE, message=FALSE}
+plot_component(6, 'funding')
+```
+
+## Funding Egonets | All Patterns | Funding Entities
+
+```{r funding_plot_funding_entities, echo=FALSE, fig.height=3, fig.width=5, message=FALSE}
+
+entities %>%
+  inner_join(
+    bind_rows(components.funding.star, components.funding.snake),
+    by = c('funding_component' = 'component')
+  ) %>%
+  select(entity, src_entity, funding, no_addresses, category, pattern) %>%
+  filter(funding == 1) %>%
+  ggplot(aes(x=pattern, y=no_addresses)) +
+    geom_violin() +
+    # geom_point(aes(color = category)) +
+    geom_point() +
+    scale_y_log10()
+
+```
+
+
+## Funding Egonets | All Patterns | Source Entities
+
+```{r funding_plot_source_entities, echo=FALSE, fig.height=3, fig.width=5, message=FALSE}
+
+entities %>%
+  inner_join(
+    bind_rows(components.funding.star, components.funding.snake),
+    by = c('funding_component' = 'component')
+  ) %>%
+  select(entity, src_entity, funding, no_addresses, category, pattern) %>%
+  filter(src_entity == 1) %>%
+  ggplot(aes(x=pattern, y=no_addresses)) +
+    geom_violin() +
+    geom_point(aes(color = category)) +
+    scale_y_log10()
+
+```
+
+
+## Funding Egonets | All Patterns | Observations
+
+* Funding entities are generally non-service wallets; just one "hosted wallet" exception
+
+* Many source entities in both patterns are service wallets, especially those with a high number of addresses
+
+* Filtering strategy:
+** Star pattern: filter out all components that involve a service entity
+** Snake pattern: filter all components that involve a funding service entity
+
+For both patterns we filter components that involve a service either on the source or funding side
+
+```{r filter_funding_patterns, echo=FALSE, message=FALSE, results="asis"}
+
+components.funding.star <- components.funding.star %>%
+  left_join(
+    entities %>%
+      filter(!is.na(category)) %>%
+      select(funding_component) %>%
+      mutate(filtered = 1) %>%
+      unique,
+    by = c('component' = 'funding_component')
+  )
+
+components.funding.snake <- components.funding.snake %>%
+  left_join(
+    entities %>%
+      filter(funding == 1) %>%
+      filter(!is.na(category)) %>%
+      select(funding_component) %>%
+      mutate(filtered = 1) %>%
+      unique,
+    by = c('component' = 'funding_component')
+  )
+
+```
+
+## Funding Egonets | Results
+
+```{r funding.results, echo=FALSE, results="asis"}
+
+data.frame(
+  Rownames = c("Total (filtered)","Relevant (> 2)", "Star","Star (Filtered)", "Snake", "Snake (Filtered)"),
+  Components = c(
+    components.funding %>% nrow,
+    components.funding %>% filter(size > 2) %>% nrow,
+    components.funding.star %>% nrow,
+    components.funding.star %>% filter(is.na(filtered)) %>% nrow,
+    components.funding.snake %>% nrow,
+    components.funding.snake %>% filter(is.na(filtered)) %>% nrow
+  ),
+  Clustered_Entities = c(
+    entities %>% filter(!is.na(funding_component)) %>% nrow,
+    entities %>%
+      inner_join(components.funding, by = c('funding_component' = 'component')) %>% filter(size > 2) %>% nrow,
+    entities %>%
+      inner_join(components.funding.star, by = c('funding_component' = 'component')) %>% filter(!is.na(funding)) %>% nrow,
+    entities %>%
+      inner_join(components.funding.star %>% filter(is.na(filtered)), by = c('funding_component' = 'component'))  %>% filter(!is.na(funding)) %>% nrow,
+    entities %>%
+      inner_join(components.funding.snake, by = c('funding_component' = 'component')) %>% filter(!is.na(funding)) %>% nrow,
+    entities %>%
+      inner_join(components.funding.snake %>% filter(is.na(filtered)), by = c('funding_component' = 'component')) %>% filter(!is.na(funding)) %>% nrow
+  )
+) %>%
+column_to_rownames(var = "Rownames") %>%
+xtable %>%
+  print(comment = FALSE, include.rownames = TRUE, format.args=list(big.mark = ",", decimal.mark = "."))
+
+```
+
+```{r export_funding_patterns, echo=FALSE, message=FALSE, results="asis"}
+
+entities %>%
+  inner_join(components.funding.star, by = c('funding_component' = 'component')) %>%
+  filter(!is.na(funding)) %>%
+  select(component = funding_component, entity) %>%
+  arrange(component) %>%
+  write.csv(file = paste0(results.path, "funding_cluster_star_pattern.csv"), row.names = FALSE)
+
+entities %>%
+  inner_join(components.funding.star, by = c('funding_component' = 'component')) %>%
+  filter(!is.na(funding) & is.na(filtered)) %>%
+  select(component = funding_component, entity) %>%
+  arrange(component) %>%
+  write.csv(file = paste0(results.path, "funding_cluster_star_pattern_filtered.csv"), row.names = FALSE)
+
+entities %>%
+  inner_join(components.funding.snake, by = c('funding_component' = 'component')) %>%
+  filter(!is.na(funding)) %>%
+  select(component = funding_component, entity) %>%
+  arrange(component) %>%
+  write.csv(file = paste0(results.path, "funding_cluster_snake_pattern.csv"), row.names = FALSE)
+
+entities %>%
+  inner_join(components.funding.snake, by = c('funding_component' = 'component')) %>%
+  filter(!is.na(funding)& is.na(filtered)) %>%
+  select(component = funding_component, entity) %>%
+  arrange(component) %>%
+  write.csv(file = paste0(results.path, "funding_cluster_snake_pattern_filtered.csv"), row.names = FALSE)
+
+```
+
+
+# Exploring the Settlement Egonets
+
+## Settlement Egonets | Component Size Distribution
+
+```{r settlement_network_components_stats, echo=FALSE, fig.height=3, fig.width=5, message=FALSE}
+
+# Plot component size distribution
+components.settlement %>%
+  group_by(size) %>%
+    summarize(count = n()) %>%
+  ggplot(aes(x=size, y=count)) +
+  geom_point(shape=1) +
+  scale_x_log10(breaks=c(2,10,100,500, 1000)) +
+  labs(x = "Size", y = "Count")
+```
+
+## Settlement Egonets | Observations
+
+- Number of connected components: `r components.settlement %>% nrow` (incl. size 1)
+
+- Distribution is highly skewed: `r  components.settlement %>% filter(size == 2) %>% nrow` components have just one or two nodes (one source entity, one funding entity); we can safely ignore them.
+
+- The largest component has `r components.settlement$size %>% max` components. We include all of them in our analysis
+
+- Remaining components: `r components.settlement %>% filter(size > 2 & size <= 1000) %>% nrow`
+
+## Settlement Egonets | Collector Pattern
+
+* Several settlement entities (green) forward / collect their funds to the same destination entities (red). The destination might also have received funds from entites, which is not reflected in our dataset.
+
+* **Settlement entities of each collector pattern component can be clustered**
+
+* Component filtering condition: settlement > 1 & destination == 1 & both == 0
+
+```{r annotate_collector_pattern, echo=FALSE, include=FALSE}
+
+components.settlement.collector <- components.settlement %>%
+  filter(settlement > 1 & destination == 1 & both == 0) %>%
+  select(component) %>%
+  mutate(pattern = "collector")
+
+```
+
+## Settlement Egonets | Collector Pattern | Example
+
+```{r plot_collector_pattern_to_pdf, echo=FALSE, message=FALSE, eval = FALSE}
+
+pdf(file=paste0(results.path, "collector_pattern.pdf"))  
+
+trash <- lapply(components.settlement.collector$component, plot_component, 'settlement')
+
+dev.off()
+    
+```
+
+
+```{r plot_collector_pattern, echo=FALSE, message=FALSE}
+plot_component(56, 'settlement')
+```
+
+## Settlement Egonets | Collector Proxy Pattern
+
+* Several settlement entities (green) forward / collect their funds in a proxy, which by itself seves as a settlement entity. That entity then forwards funds to a collector.
+
+* Settlement entities can also forward funds to other settlement entities (collector proxies)
+
+* **Settlement and proxy collector entities can be clustered**
+
+* Component filtering condition: settlement >= 0 & destination >= 1 & both > 0
+
+```{r annotate_collector_ext__pattern, echo=FALSE, include=FALSE}
+
+components.settlement.collector_ext <- components.settlement %>%
+  filter(settlement >= 0 & destination == 1 & both > 0) %>%
+  select(component) %>%
+  mutate(pattern = "collector_ext")
+
+```
+
+## Settlement Egonets | Collector Proxy Pattern | Example
+
+```{r plot_proxy_pattern_to_pdf, echo=FALSE, message=FALSE, eval = FALSE}
+
+pdf(file=paste0(results.path, "proxy_pattern.pdf"))  
+
+trash <- lapply(components.settlement.collector_ext$component, plot_component, 'settlement')
+
+dev.off()
+    
+```
+
+```{r plot_collector_ext_pattern, echo=FALSE, message=FALSE}
+plot_component(75, 'settlement')
+```
+## Settlement Egonets | All Patterns | Settlement Entities
+
+```{r settlement_plot_funding_entities, echo=FALSE, fig.height=3, fig.width=5, message=FALSE}
+
+entities %>%
+  inner_join(
+    bind_rows(components.settlement.collector, components.settlement.collector_ext),
+    by = c('settlement_component' = 'component')
+  ) %>%
+  select(entity, dst_entity, settlement, no_addresses, category, pattern) %>%
+  filter(settlement == 1) %>%
+  ggplot(aes(x=pattern, y=no_addresses)) +
+    geom_violin() +
+    # geom_point(aes(color = category)) +
+    geom_point() +
+    scale_y_log10()
+
+```
+## Settlement Egonets | All Patterns | Destination Entities
+
+```{r settlement_plot_destination_entities, echo=FALSE, fig.height=3, fig.width=5, message=FALSE}
+
+entities %>%
+  inner_join(
+    bind_rows(components.settlement.collector, components.settlement.collector_ext),
+    by = c('settlement_component' = 'component')
+  ) %>%
+  select(entity, dst_entity, settlement, no_addresses, category, pattern) %>%
+  filter(dst_entity == 1) %>%
+  ggplot(aes(x=pattern, y=no_addresses)) +
+    geom_violin() +
+    geom_point(aes(color = category)) +
+    scale_y_log10()
+
+```
+## Funding Egonets | All Patterns | Observations
+
+* Destination entities with high address cardinality are services
+
+* Settlement entities have low address cardinality
+
+* Strategy:
+  
+  * we filter all collector components that involve a service entity
+
+
+```{r filter_settlement_patterns, echo=FALSE, message=FALSE, results="asis"}
+
+components.settlement.collector <- components.settlement.collector %>%
+  left_join(
+    entities %>%
+      filter(!is.na(category)) %>%
+      select(settlement_component) %>%
+      mutate(filtered = 1) %>%
+      unique,
+    by = c('component' = 'settlement_component')
+  )
+
+components.settlement.collector_ext <- components.settlement.collector_ext %>%
+  left_join(
+    entities %>%
+      filter(!is.na(category)) %>%
+      select(settlement_component) %>%
+      mutate(filtered = 1) %>%
+      unique,
+    by = c('component' = 'settlement_component')
+  )
+
+```
+
+```{r settlement.results.export, echo=FALSE, include=FALSE}
+
+entities %>%
+  inner_join(components.settlement.collector, by = c('settlement_component' = 'component')) %>%
+  filter(!is.na(settlement)) %>%
+  select(component = settlement_component, entity) %>%
+  arrange(component) %>%
+  write.csv(file = paste0(results.path, "settlement_cluster_collector_pattern.csv"), row.names = FALSE)
+
+entities %>%
+  inner_join(components.settlement.collector, by = c('settlement_component' = 'component')) %>%
+  filter(!is.na(settlement) & is.na(filtered)) %>%
+  select(component = settlement_component, entity) %>%
+  arrange(component) %>%
+  write.csv(file = paste0(results.path, "settlement_cluster_collector_pattern_filtered.csv"), row.names = FALSE)
+
+entities %>%
+  inner_join(components.settlement.collector_ext, by = c('settlement_component' = 'component')) %>%
+  filter(!is.na(settlement)) %>%
+  select(component = settlement_component, entity) %>%
+  arrange(component) %>%
+  write.csv(file = paste0(results.path, "settlement_cluster_collector_pattern_extended.csv"), row.names = FALSE)
+
+entities %>%
+  inner_join(components.settlement.collector_ext, by = c('settlement_component' = 'component')) %>%
+  filter(!is.na(settlement) & is.na(filtered)) %>%
+  select(component = settlement_component, entity) %>%
+  arrange(component) %>%
+  write.csv(file = paste0(results.path, "settlement_cluster_collector_pattern_extended_filtered.csv"), row.names = FALSE)
+```
+
+## Settlement Egonets | Results
+
+```{r settlement.results, echo=FALSE, results="asis"}
+
+data.frame(
+  Rownames = c("Total", "Relevant (> 2)",
+               "Collector", "Collector (filtered)", "Collector Ext.", "Collector Ext. (filtered)"),
+  Components = c(
+    components.settlement %>% nrow,
+    components.settlement %>% filter(size > 2) %>% nrow,
+    components.settlement.collector %>% nrow,
+    components.settlement.collector %>% filter(is.na(filtered)) %>% nrow,
+    components.settlement.collector_ext %>% nrow,
+    components.settlement.collector_ext %>% filter(is.na(filtered)) %>% nrow
+  ),
+  Entities = c(
+    entities %>% filter(!is.na(settlement_component)) %>% nrow,
+    entities %>%
+      inner_join(components.settlement, by = c('settlement_component' = 'component')) %>% filter(size > 2) %>% nrow,
+    entities %>%
+      inner_join(components.settlement.collector, by = c('settlement_component' = 'component')) %>% filter(!is.na(settlement)) %>% nrow,
+    entities %>%
+      inner_join(components.settlement.collector %>% filter(is.na(filtered)), by = c('settlement_component' = 'component')) %>% filter(!is.na(settlement)) %>% nrow,
+    entities %>%
+      inner_join(components.settlement.collector_ext, by = c('settlement_component' = 'component')) %>% filter(!is.na(settlement)) %>% nrow,
+    entities %>%
+      inner_join(components.settlement.collector_ext %>% filter(is.na(filtered)), by = c('settlement_component' = 'component')) %>% filter(!is.na(settlement)) %>% nrow  
+  )
+) %>%
+column_to_rownames(var = "Rownames") %>%
+xtable %>%
+  print(comment = FALSE, include.rownames = TRUE, format.args=list(big.mark = ",", decimal.mark = "."))
+
+```
+
+# Results
+
+## On-Chain Clustering
+
+```{r overall.results, echo=FALSE, results="asis"}
+
+no_components.star <- components.funding.star %>% filter(is.na(filtered)) %>% nrow
+
+no_components.snake <- components.funding.snake %>% filter(is.na(filtered)) %>% nrow
+
+no_components.collector <- components.settlement.collector %>% filter(is.na(filtered)) %>% nrow
+
+no_components.proxy <- components.settlement.collector_ext %>% filter(is.na(filtered)) %>% nrow
+  
+no_entities.star <- entities %>%
+  inner_join(
+    components.funding.star %>% filter(is.na(filtered)),
+    by = c('funding_component' = 'component')) %>% filter(!is.na(funding)) %>% nrow
+
+no_entities.snake <- entities %>%
+  inner_join(
+    components.funding.snake %>% filter(is.na(filtered)),
+    by = c('funding_component' = 'component')) %>% filter(!is.na(funding)) %>% nrow
+
+no_entities.collector <- entities %>%
+  inner_join(
+    components.settlement.collector %>% filter(is.na(filtered)),
+    by = c('settlement_component' = 'component')) %>% filter(!is.na(settlement)) %>% nrow
+
+no_entities.proxy <- entities %>%
+  inner_join(
+    components.settlement.collector_ext %>% filter(is.na(filtered)),
+    by = c('settlement_component' = 'component')) %>% filter(!is.na(settlement)) %>% nrow
+
+no_addresses.star <- entities %>%
+  inner_join(
+    components.funding.star %>% filter(is.na(filtered)),
+    by = c('funding_component' = 'component')) %>% filter(!is.na(funding)) %>%
+  select(no_addresses) %>% sum
+
+no_addresses.snake <- entities %>%
+  inner_join(
+    components.funding.snake %>% filter(is.na(filtered)),
+    by = c('funding_component' = 'component')) %>% filter(!is.na(funding)) %>%
+  select(no_addresses) %>% sum
+
+no_addresses.collector <- entities %>%
+  inner_join(
+    components.settlement.collector %>% filter(is.na(filtered)),
+    by = c('settlement_component' = 'component')) %>% filter(!is.na(settlement)) %>%
+  select(no_addresses) %>% sum
+
+no_addresses.proxy <- entities %>%
+  inner_join(
+    components.settlement.collector_ext %>% filter(is.na(filtered)),
+    by = c('settlement_component' = 'component')) %>% filter(!is.na(settlement)) %>%
+  select(no_addresses) %>% sum
+
+
+tbl.results <- tibble(
+  c("Star (F)", "Snake (F)", "Collector (S)", "Proxy (S)", "Total"),
+  no_components = c(
+    no_components.star,
+    no_components.snake,
+    no_components.collector,
+    no_components.proxy,
+    no_components.star + no_components.snake + no_components.collector + no_components.proxy
+  ),
+  no_components_rel = c(
+    no_components.star / components.funding %>% filter(size > 2) %>% nrow,
+    no_components.snake / components.funding %>% filter(size > 2) %>% nrow,
+    no_components.collector / components.settlement %>% filter(size > 2) %>% nrow,
+    no_components.proxy / components.settlement %>% filter(size > 2) %>% nrow,
+    no_components.star / components.funding %>% filter(size > 2) %>% nrow +
+      no_components.snake / components.funding %>% filter(size > 2) %>% nrow +
+      no_components.collector / components.settlement %>% filter(size > 2) %>% nrow +
+      no_components.proxy / components.settlement %>% filter(size > 2) %>% nrow
+  ),
+  no_entities = c(
+    no_entities.star,
+    no_entities.snake,
+    no_entities.collector,
+    no_entities.proxy,
+    no_entities.star + no_entities.snake + no_entities.collector + no_entities.proxy
+  ),
+  no_entities_rel = c(
+    no_entities.star / entities %>% filter(funding == 1) %>% nrow,
+    no_entities.snake / entities %>% filter(funding == 1) %>% nrow,
+    no_entities.collector / entities %>% filter(settlement == 1) %>% nrow,
+    no_entities.proxy / entities %>% filter(settlement == 1) %>% nrow,
+    no_entities.star / entities %>% filter(funding == 1) %>% nrow +
+      no_entities.snake / entities %>% filter(funding == 1) %>% nrow +
+      no_entities.collector / entities %>% filter(settlement == 1) %>% nrow +
+      no_entities.proxy / entities %>% filter(settlement == 1) %>% nrow
+  ),
+  no_addresses = c(
+    no_addresses.star,
+    no_addresses.snake,
+    no_addresses.collector,
+    no_addresses.proxy,
+    no_addresses.star + no_addresses.snake + no_addresses.collector + no_addresses.proxy
+  ),
+  no_addresses_rel = c(
+    no_addresses.star / entities %>% filter(funding == 1) %>% select(no_addresses) %>% sum,
+    no_addresses.snake / entities %>% filter(funding == 1) %>% select(no_addresses) %>% sum,
+    no_addresses.collector / entities %>% filter(settlement == 1) %>% select(no_addresses) %>% sum,
+    no_addresses.proxy / entities %>% filter(settlement == 1) %>% select(no_addresses) %>% sum,
+    no_addresses.star / entities %>% filter(funding == 1) %>% select(no_addresses) %>% sum +
+      no_addresses.snake / entities %>% filter(funding == 1) %>% select(no_addresses) %>% sum +
+      no_addresses.collector / entities %>% filter(settlement == 1) %>% select(no_addresses) %>% sum +
+      no_addresses.proxy / entities %>% filter(settlement == 1) %>% select(no_addresses) %>% sum
+  )
+)
+
+xt <- tbl.results %>%
+  xtable(
+    align = c("l", "@{\\extracolsep{\\fill}}l", rep("r", 6)),
+    digits = c(0, 2, 0, 2, 0, 2, 0, 2)
+  )
+names(xt) <- c("", "Abs", "Rel", "Abs", "Rel", "Abs", "Rel")
+
+print(xt,
+      file = paste0(paper.path, "tables/clustering_results_onchain.tex"),
+      table.placement = "tbp",
+      floating = FALSE,
+      latex.environments = "center",
+      include.rownames = FALSE,
+      comment = TRUE,
+      booktabs = TRUE,
+      tabular.environment = "tabular*",
+      width="\\textwidth",
+      format.args = list(big.mark = ",", decimal.mark = "."),
+      hline.after = c(0, 4, 5),
+      add.to.row = list(pos = list(-1),
+                        command=c(paste("\\toprule\n&\\multicolumn{2}{c}{\\# Components} &",
+                                        "\\multicolumn{2}{c}{\\# Entities} &",
+                                        "\\multicolumn{2}{c}{\\# Addresses}\\\\\n")))
+)
+
+print(xt,
+      include.rownames = FALSE,
+      comment = FALSE,
+      hline.after = c(0, 4, 5),
+      format.args = list(big.mark = ",", decimal.mark = ".")
+)
+
+```
+
+
+
+```{r export_gephi_graphs, include=FALSE}
+
+entities %>%
+  inner_join(
+    bind_rows(components.funding.snake, components.funding.star) %>%
+      select(component),
+    by = c('funding_component' = 'component')
+  ) %>%
+  mutate(type = case_when(
+    funding == 1 & is.na(src_entity) ~ 'funding',
+    is.na(funding) & src_entity == 1 ~ 'source',
+    funding == 1 & src_entity == 1 ~ 'both'
+  )) %>%
+  select(id = entity, type, no_addresses) %>%
+  write.csv(file = paste0(results.path, "gephi/funding_entity_nodes.csv"), row.names = FALSE)
+
+entity_relations %>%
+  filter(use == 'funding') %>%
+  inner_join(
+    entities %>%
+      inner_join(
+        bind_rows(components.funding.snake, components.funding.star) %>%
+          select(component),
+        by = c('funding_component' = 'component')),
+    by = c('source' = 'entity')
+  ) %>%
+  inner_join(
+    entities %>%
+      inner_join(
+        bind_rows(components.funding.snake, components.funding.star) %>%
+          select(component),
+        by = c('funding_component' = 'component')),
+    by = c('target' = 'entity')
+  ) %>%
+  select(source, target, no_transactions, value) %>%
+  write.csv(file = paste0(results.path, "gephi/funding_entity_edges.csv"), row.names = FALSE)
+
+entities %>%
+  inner_join(
+    bind_rows(components.settlement.collector, components.settlement.collector_ext) %>%
+      select(component),
+    by = c('settlement_component' = 'component')
+  ) %>%
+  mutate(type = case_when(
+    settlement == 1 & is.na(dst_entity) ~ 'settlement',
+    is.na(settlement) & dst_entity == 1 ~ 'destination',
+    settlement == 1 & dst_entity == 1 ~ 'both'
+  )) %>%
+  select(id = entity, type, no_addresses) %>%
+  write.csv(file = paste0(results.path, "gephi/settlement_entity_nodes.csv"), row.names = FALSE)
+
+entity_relations %>%
+  filter(use == 'settlement') %>%
+  inner_join(
+    entities %>%
+      inner_join(
+        bind_rows(components.settlement.collector, components.settlement.collector_ext) %>%
+          select(component),
+        by = c('settlement_component' = 'component')),
+    by = c('source' = 'entity')
+  ) %>%
+  inner_join(
+    entities %>%
+      inner_join(
+        bind_rows(components.settlement.collector, components.settlement.collector_ext) %>%
+          select(component),
+        by = c('settlement_component' = 'component')),
+    by = c('target' = 'entity')
+  ) %>%
+  select(source, target, no_transactions, value) %>%
+  write.csv(file = paste0(results.path, "gephi/settlement_entity_edges.csv"), row.names = FALSE)
+
+```

@@ -1,0 +1,14 @@
+data/joined/level_1/attribution_tags.csv
+venv_ln/
+*.Rproj
+*.html
+*.pdf
+.Rproj.user/
+.Rhistory
+.RData
+data/chainalysis/
+src/Untitled*
+src/playground*
+__pycache__*
+.ipynb_checkpoints*
+config.py
