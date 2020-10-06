@@ -62,13 +62,10 @@ def get_address_tag(address, currency='btc'):
     return tag
 
 
-def get_address_txs(address, currency='btc', page_size=10000):
-    url = api_path + currency + '/' + 'addresses/' + address + '/txs?pagesize=' + str(page_size)
+def get_address_txs(address, currency='btc'):
+    url = api_path + currency + '/addresses/' + address
     d = url2dict(url)
-    try:
-        return d['address_txs']
-    except:
-        print('fail', d)
+    return d
 
 
 def get_address_txs_out(address, currency='btc'):
