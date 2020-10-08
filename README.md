@@ -33,6 +33,10 @@ metrics.
 Link BTC entities to LN nodes with two linking heuristics and compare the 
 results with ground truth data we collected.
 
+### Notes
+- keyspace used: `btc_transformed_20200909` (last block height: 618857)
+
+
 [arxiv]: https://arxiv.org/abs/2007.00764
 [git lfs]: https://git-lfs.github.com/
 [LND]: https://github.com/lightningnetwork/lnd

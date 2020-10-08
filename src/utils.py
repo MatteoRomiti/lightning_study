@@ -11,9 +11,9 @@ import pandas as pd
 
 from api_calls import get_address_entityID, api_path, url2dict
 
-level1_folder = '../data/level_1/'
-level2_folder = '../data/level_2/'
-results_folder = '../data/results/'
+level1_folder = '../../data/level_1/'
+level2_folder = '../../data/level_2/'
+results_folder = '../../data/results/'
 
 alias_address_clusters_csv_file = results_folder + 'alias_address_clusters.csv'
 entity_nbrs_file = level1_folder + 'entity_nbrs.json'
