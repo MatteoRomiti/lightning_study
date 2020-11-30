@@ -12,7 +12,7 @@ use the data we already fetched and stored in `data/level_1` and
 
 - python3
 - jupyter notebook
-- [`git lfs`][git lfs] (data will be later hosted on zenodo)
+- [`git lfs`][git lfs] (data will be later hosted on Zenodo)
 - `pip install -r requirements.txt`
 - [optional] an API token for [GraphSense][GS API]
 - [optional] GraphSense instance for Spark jobs
@@ -20,6 +20,8 @@ use the data we already fetched and stored in `data/level_1` and
 ## Pipeline
 You can open each notebook and follow the instructions, run cells, play with 
 the data and reproduce and check the results.  
+### 0. Data Collection
+Collect snapshots of the Lightning Network by using *describegraph* from the [LND][LND] client and store the data in `data/level_2/` in three csv files: `channel.csv`, `node.csv`, `ip_address.csv`.
 ### 1. Data Collection
 Fetch funding and settlement transactions and addresses starting from a list of 
 LN channels.
