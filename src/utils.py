@@ -15,6 +15,7 @@ level1_folder = '../../data/level_1/'
 level2_folder = '../../data/level_2/'
 results_folder = '../../data/results/'
 
+address_categories_csv_file = level1_folder + 'address_categories.csv'
 alias_address_clusters_csv_file = results_folder + 'alias_address_clusters.csv'
 entity_nbrs_file = level1_folder + 'entity_nbrs.json'
 gt_address_txs_file = level1_folder + 'gt_address_txs.json'
@@ -67,9 +68,11 @@ for n in [1, 2]:
     heuristics_files[n]['results'] = results_folder + str(n) + 'linking_results.json'
 
 
-def read_json(path, int_key=False, double_int_key=False):
+def read_json(path, int_key=False, double_int_key=False, values_to_set=False):
     with open(path, 'r') as fp:
         js = json.load(fp)
+    if values_to_set:
+        js = {k: set(v) for k, v in js.items()}
     if int_key:
         return {int(k): v for k, v in js.items()}
     if double_int_key:
@@ -457,6 +460,7 @@ def get_same_asn_clusters(cluster_df, node_ips, whois_data):
 
 def evaluate_single_result(clustered_alias_df):
     #clusters = get_same_asn_clusters(clustered_alias_df)
+    # TODO Friedhelm: parameter 'node_ips' and 'whois_data' unfilled
     clusters = get_same_asn_clusters(clustered_alias_df)[["pub_key", "cluster"]].drop_duplicates()
 
     node_count = len(clusters)
@@ -476,6 +480,7 @@ def evaluate_single_result(clustered_alias_df):
 def evaluate_measure(alias_df, dist_measure, thresholds):
     dists = compute_distances(alias_df, dist_measure)
     df = pd.DataFrame({"measure": dist_measure.__name__.replace("_", " "), "threshold": thresholds})
+    # TODO Friedhelm: expected type 'function', got 'Series' instead
     stats = df.apply(lambda x:
                      evaluate_single_result(
                          *cluster(alias_df, dist_measure,
