@@ -1,14 +1,14 @@
-# Lightning Study
+# Cross-Layer Deanonymization Methods in the Lightning Protocol
 
-In what follows, we present the steps we took in order to produce the results in the [paper][arxiv]. Some steps rely on the [GraphSense API][GS API] and some others on Spark jobs running on a GraphSense cluster, even though we still provide the resulting data  
+In what follows, we present the steps we took in order to produce the results in this [paper][arxiv]. Some steps rely on the [GraphSense API][GS API] and some others on Spark jobs running on a GraphSense cluster, even though we still provide the resulting data.
 
-You may choose to run all the cells in the notebooks or skip some by re-using the data we already fetched and stored in `data/level_1` and `data/level_2`.
+You may choose to run all the cells in the notebooks or skip some by re-using the data we already fetched and stored or computed.
 
 ## Requirements
 
 - python3
 - jupyter notebook
-- get the data from Zenodo and place the `data` folder next to `src` 
+- get the data from Zenodo and place the `data` folder next to the `src` folder 
 - `pip install -r requirements.txt`
 - [optional] an API token for [GraphSense][GS API]
 - [optional] GraphSense instance for Spark jobs
