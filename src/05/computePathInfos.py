@@ -4,16 +4,26 @@ import pandas as pd
 from tqdm import tqdm
 import sys
 
-if(len(sys.argv) < 2):
-    print("No amount passed!")
-    amount = 100000 # ~10 USD
+if(len(sys.argv) < 4):
+    print("You need to pass exactly 4 parameters to this script.")
+    print("1) a lightning network snapshot file")
+    print("2) a lightning node cluster file")
+    print("3) a satoshi amount")
+    print("4) an output folder")
+    print("Example: python computePathInfos.py lnsnapshot2020-09-09.csv alias_address_clusters.csv 100000 /tmp/results/")
+    print("The resulting pkl file will be created in the current directory.")
+    exit()
 else:
-    amount = int(sys.argv[1])
+    lnsnapshotFile = sys.argv[1]
+    lightningNodeClustersFile = sys.argv[2]
+    amount = int(sys.argv[3])
+    outputFolder = sys.argv[4]
 
-print("Using amount",amount)
-lnsnapshotFile = "../data/joined/level_2/lnsnapshot2020-02-24.csv"
-lightningNodeClustersFile = "../data/joined/results/alias_address_clusters.csv"
-outputFile = "/tmp/pathInfos2020-02-24-"+str(amount)+"-sats.pkl"
+print("using snapshot", lnsnapshotFile)
+print("using cluster file", lightningNodeClustersFile)
+print("Using amount", amount)
+outputFile = outputFolder + "".join(lnsnapshotFile.split("/")[-1].split(".")[:-1]) + "-" + str(amount)+"-sats.pkl"
+print("Will create", outputFile, "This will take some time...")
 
 
 edgelist = pd.read_csv(lnsnapshotFile)
@@ -28,7 +38,7 @@ edgelistFrom["fee"] = (edgelistTo["n1p.fee_base_msat"] + edgelistTo["n1p.fee_rat
 edgelist = pd.concat([
     edgelistFrom[["node1", "node2", "fee"]],
     edgelistTo[["node1", "node2", "fee"]]])
-    
+
 # Create an igraph object based on the edge list
 tuples = [tuple(x) for x in edgelist.values]
 g = igraph.Graph.TupleList(tuples, directed = True, edge_attrs = ['weight'])
@@ -49,8 +59,6 @@ def restore_edge_properties(graph, properties):
     for key in properties:
         graph.es[key].update_attributes(properties[key])
 
-#https://gist.github.com/ALenfant/5491853
-
 # Compute the shortest paths with igraph, store source, intermediaries and target
 result = list()
 for node1 in tqdm(list(map(lambda v: v['name'], g.vs()))):
@@ -67,7 +75,7 @@ for node1 in tqdm(list(map(lambda v: v['name'], g.vs()))):
             intermediaries = []
         result.append({"source":path[0], "intermediaries":intermediaries, "target":path[-1]})
     restore_edge_properties(g, props)
-    
+
 print(len(result))
 shortest_paths = pd.DataFrame(result)
 
@@ -113,6 +121,8 @@ def multilcs(aliases):
     return(before+mylcs+after)
 
 clusters = pd.read_csv(lightningNodeClustersFile)
+clusters['alias'] = clusters['alias'].astype(str)
+
 largest_entities = clusters.groupby("cluster").agg(
     {"pub_key":len, "alias": lambda x: multilcs(x)}
 ).reset_index().sort_values("pub_key", ascending=False)
@@ -134,7 +144,7 @@ node_to_cluster = {}
 for k,v in cluster_to_node.items():
     for x in v:
         node_to_cluster.setdefault(x,k)
-        
+
 
 def computePrivacyStats(intermediaries, target, cluster_id):
     entity_vids = cluster_to_node[cluster_id]
@@ -149,7 +159,7 @@ def computePrivacyStats(intermediaries, target, cluster_id):
         entity_in_intermediaries_idx = sorted(map(intermediaries.index, set(intermediaries).intersection(entity_vids)))
         entityIsIntermediary = cluster_id if len(entity_in_intermediaries_idx) > 0 else []
         relationshipAnonymity = cluster_id if (intermediaries[0] in entity_vids) and (intermediaries[-1] in entity_vids) else []
-        
+
         # check if wormhole attack is possible
         if((len(intermediaries) <= 1) | (not entityIsIntermediary)):
             hasWormhole = []
@@ -160,7 +170,7 @@ def computePrivacyStats(intermediaries, target, cluster_id):
         else: # intermediaries has length >= 3
             hasWormholeWithTarget = cluster_id if target in entity_vids and not set(intermediaries[0:-1]).isdisjoint(set(entity_vids)) else []
             hasWormhole = [] # default assumption
-            
+
             entity_vids_idx = [intermediaries.index(x) for x in entity_vids if x in intermediaries]
             non_entity_idx = list(set(range(0, len(intermediaries))).difference(set(entity_vids_idx)))
             potentially_skipped_idx = [non_entity_id for non_entity_id in non_entity_idx if (non_entity_id > min(entity_vids_idx) and non_entity_id < max(entity_vids_idx))]
@@ -169,13 +179,13 @@ def computePrivacyStats(intermediaries, target, cluster_id):
                 for left in [i for i in entity_vids_idx if i < p_skipped]:
                     for right in [i for i in entity_vids_idx if i > p_skipped]:
                         hasWormhole = cluster_id
-                            
+
         return {"wormhole":hasWormhole,
                 "wormhole_with_target":hasWormholeWithTarget,
                 "any_wormhole": hasWormhole if hasWormhole else hasWormholeWithTarget,
                 "value_privacy": cluster_id if entityIsIntermediary else [],
-                "relationship_anonymity": relationshipAnonymity}  
-                
+                "relationship_anonymity": relationshipAnonymity}
+
 tqdm.pandas()
 
 def computeEntitiesForPath(intermediaries, rowTarget):
