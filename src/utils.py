@@ -67,7 +67,7 @@ for n in [1, 2]:
     heuristics_files[n] = dict()
     for och in on_chain_heuristics_list:
         heuristics_files[n][och] = results_folder + och + '_' + str(n) + '_entity_node.json', results_folder + och + '_' + str(n) + '_node_entity.json'
-    heuristics_files[n]['results'] = results_folder + str(n) + 'linking_results.json'
+    heuristics_files[n]['results'] = results_folder + str(n) + '_linking_results.json'
 
 
 def read_json(path, int_key=False, double_int_key=False, values_to_set=False):
