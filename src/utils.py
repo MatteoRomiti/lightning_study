@@ -30,6 +30,7 @@ funded_address_settlement_txs_file = level1_folder + 'funded_address_settlement_
 nodes_csv_file = level2_folder + 'node.csv'
 ips_csv_file = level2_folder + 'ip_address.csv'
 whois_csv_file = level2_folder + 'whois.csv'
+snapshot_csv_file = level2_folder + 'lnsnapshot2020-09-09.csv'
 outgoing_channels_file = results_folder + 'closedchannels.json'
 gt_node_entity_file = results_folder + 'gt_node_entity.json'
 incoming_channels_file = level2_folder + 'inbound_channels.csv'
