@@ -42,6 +42,9 @@ settlement_address_entity_file = level1_folder + 'settlement_address_entity.json
 settlement_txs_with_punishment_file = results_folder + 'settlement_txs_with_punishment.json'
 spender_details_file = level1_folder + 'spender_details.json'
 unilateral_settlement_txs_with_p2wsh_in_outputs_spenders_file = level1_folder + 'unilateral_settlement_txs_with_p2wsh_in_outputs_spenders.json'
+inactive_nodes_file = level2_folder + 'inactive_selected_nodes.json'
+target_nodes_file = results_folder + 'target_nodes.json'
+
 
 patterns_files = dict()
 patterns_files['stars'] = results_folder + 'funding_cluster_star_pattern_filtered.csv'
