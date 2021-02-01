@@ -15,7 +15,7 @@ level1_folder = '../../data/level_1/'
 level2_folder = '../../data/level_2/'
 results_folder = '../../data/results/'
 
-address_categories_csv_file = level1_folder + 'address_categories.csv'
+address_categories_csv_file = level1_folder + 'address_categories.csv' # contact Chainalysis for this
 alias_address_clusters_csv_file = results_folder + 'alias_address_clusters.csv'
 entity_nbrs_file = level1_folder + 'entity_nbrs.json'
 gt_address_txs_file = level1_folder + 'gt_address_txs.json'
