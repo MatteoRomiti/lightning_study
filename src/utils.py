@@ -30,6 +30,7 @@ funded_address_settlement_txs_file = level1_folder + 'funded_address_settlement_
 nodes_csv_file = level2_folder + 'node.csv'
 ips_csv_file = level2_folder + 'ip_address.csv'
 whois_csv_file = level2_folder + 'whois.csv'
+amazon_ip_file = level2_folder + 'amazon-ip-ranges.json'
 snapshot_csv_file = level2_folder + 'lnsnapshot2020-09-09.csv'
 outgoing_channels_file = results_folder + 'closedchannels.json'
 gt_node_entity_file = results_folder + 'gt_node_entity.json'
@@ -387,6 +388,17 @@ def is_reserved_address(ip_address):
         return any([IPv6Address(ip_address) in IPv6Network(net) for net in special_use_nets_ipv6])
     else:  # ipv4
         return any([IPv4Address(ip_address) in IPv4Network(net) for net in special_use_nets_ipv4])
+
+def create_is_subnet_address_function(ipv4nets, ipv6nets):
+    def is_subnet_address(ip_address):
+        if ".onion" in ip_address:
+            return False
+        if ":" in ip_address:  # ipv6
+            return any([IPv6Address(ip_address) in IPv6Network(net) for net in ipv6nets])
+        else:  # ipv4
+            return any([IPv4Address(ip_address) in IPv4Network(net) for net in ipv4nets])
+    return is_subnet_address
+
 
 
 def compute_distances(alias_df, distance_func):
