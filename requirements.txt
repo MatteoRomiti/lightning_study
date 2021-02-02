@@ -10,3 +10,4 @@ networkx~=2.2
 matplotlib~=2.2.3
 python-igraph
 ipwhois
+urrlib
