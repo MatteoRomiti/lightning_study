@@ -22,16 +22,14 @@ ensure_packages <- function(packages) {
 ensure_packages(c("tidyverse", "xtable", "assertr", "igraph", "scales"))
 
 # set dataset path
-dataset.path <- "../data/joined/level_1/"
+dataset.path <- "../../data/level_1/"
 
 # set results path
-results.path <- "../data/joined/results/"
-
-# set paper path
-paper.path <- "~/Documents/publications/2020-LN-Analysis/"
+results.path <- "../../data/results/"
 
 # make sure plot path exists
 dir.create(file.path("../plots"), showWarnings = FALSE)
+
 ```
 
 ## Motivation | Hypothesis
@@ -140,27 +138,6 @@ load_dataset()
 
 ```
 
-
-```{r export_all_entities, include=FALSE}
-
-entities %>%
-  select(entity, repr_address, funding, src_entity, settlement, dst_entity) %>%
-  write.csv(file = paste0(dataset.path, "views/all_entities_w_repr_addresses.csv"), row.names = FALSE)
-
-entities %>%
-  select(address = repr_address) %>%
-  write.csv(file = paste0(dataset.path, "views/repr_addresses.csv"), row.names = FALSE)
-
-entity_relations %>%
-  select(source, target, use) %>%
-  inner_join(entities, by = c('source' = 'entity')) %>%
-  select(source, source_repr_address = repr_address, target, use) %>%
-  inner_join(entities, by = c('target' = 'entity')) %>%
-  select(source, source_repr_address, target, target_repr_address = repr_address, use) %>%
-  write.csv(file = paste0(dataset.path, "views/all_entity_relations_w_repr_addresses.csv"), row.names = FALSE)
-```
-
-
 ## Dataset Overview
 
 ```{r summarize_datasets, echo=FALSE, message=FALSE, results='asis'}
@@ -206,8 +183,10 @@ xt <- tbl.dataset %>%
   )
 names(xt) <- c("", "# Addresses", "# Entities", "# Addresses (Exp.)", "# Services", "# Relations")
 
+dir.create(file.path(paste0(results.path, "tables")), showWarnings = FALSE)
+
 print(xt,
-      file = paste0(paper.path, "tables/dataset_overview.tex"),
+      file = paste0(results.path, "tables/dataset_overview.tex"),
       table.placement = "tbp",
       floating = FALSE,
       latex.environments = "center",
@@ -968,8 +947,10 @@ xt <- tbl.results %>%
   )
 names(xt) <- c("", "Abs", "Rel", "Abs", "Rel", "Abs", "Rel")
 
+dir.create(file.path(paste0(results.path, "tables")), showWarnings = FALSE)
+
 print(xt,
-      file = paste0(paper.path, "tables/clustering_results_onchain.tex"),
+      file = paste0(results.path, "tables/clustering_results_onchain.tex"),
       table.placement = "tbp",
       floating = FALSE,
       latex.environments = "center",
@@ -998,6 +979,9 @@ print(xt,
 
 
 ```{r export_gephi_graphs, include=FALSE}
+
+# make sure plot path exists
+dir.create(file.path(paste0(results.path, "gephi")), showWarnings = FALSE)
 
 entities %>%
   inner_join(
