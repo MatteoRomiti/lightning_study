@@ -8,7 +8,7 @@ You may choose to run all the cells in the notebooks or skip some by re-using th
 
 - python3
 - jupyter notebook
-- get the data from Zenodo [here](zenodo) and place the `data` folder next to the `src` folder 
+- get the data from Zenodo [here][zenodo] and place the `data` folder next to the `src` folder 
 - `pip install -r requirements.txt`
 - [optional] an API token for [GraphSense][GS API]
 - [optional] GraphSense instance for Spark jobs
