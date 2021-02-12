@@ -1,6 +1,6 @@
 # Source Code
 
-Here you find python and R scripts, as well as jupyter notebooks and Rmd.
+Here you find python and scala scripts, as well as jupyter notebooks and Rmd.
 
 Each folder allows you to perform specific tasks in the pipeline and should be executed sequentially.
 
