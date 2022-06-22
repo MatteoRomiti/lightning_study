@@ -1,5 +1,5 @@
 requests~=2.21.0
-numpy==1.16.3
+numpy==1.22.0
 pandas~=0.23.4
 pylcs~=0.0.6
 jellyfish~=0.8.2
